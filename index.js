@@ -279,6 +279,7 @@ function react(e){
 
 /* REMATCH */
 function rematch(){
+  if (!window.lastGame || window.lastGame.state !== 'finished') return;
   socket.emit('rematch',{gameId});
 }
 
@@ -296,36 +297,48 @@ socket.on('update',(g)=>{
   const ids = Object.keys(g.players);
   const p1 = g.players[ids[0]];
   const p2 = g.players[ids[1]];
+  const me = g.players[playerId];
 
   if(p1) document.getElementById('p1name').innerText = p1.name;
   if(p2) document.getElementById('p2name').innerText = p2.name;
 
-  const me = g.players[playerId];
+  const secretBox = document.getElementById('secretBox');
+  const gameBox = document.getElementById('gameBox');
+  const rematchBtn = document.getElementById('rematch');
 
-  /* STATE HANDLING */
+  /* RESET UI */
+  secretBox.style.display = 'none';
+  gameBox.style.display = 'none';
+
   if(g.state==='waiting'){
     statusBar.innerText = 'Waiting for opponent...';
   }
+
   else if(g.state==='ready'){
     if(me && me.secretSet){
-      statusBar.innerText = 'Waiting for opponent...';
-      document.getElementById('secretBox').style.display='none';
+      statusBar.innerText = 'Waiting for opponent to set secret...';
     } else {
       statusBar.innerText = 'Set your secret number';
-      document.getElementById('secretBox').style.display='block';
+      secretBox.style.display = 'block';
     }
   }
+
   else if(g.state==='playing'){
     statusBar.innerText =
       g.turn===playerId ? 'Your turn 🔥' : 'Opponent thinking...';
-    document.getElementById('gameBox').style.display='block';
-    document.getElementById('secretBox').style.display='none';
+
+    gameBox.style.display = 'block';
   }
+
   else if(g.state==='finished'){
     statusBar.innerText = 'Winner: '+g.winner;
-    document.getElementById('rematch').style.display='block';
+  }
+
+  /* REMATCH BUTTON */
+  if(g.state==='finished'){
+    rematchBtn.style.display='block';
   } else {
-    document.getElementById('rematch').style.display='none';
+    rematchBtn.style.display='none';
   }
 
   /* LOGS */
@@ -438,6 +451,8 @@ io.on('connection',(socket)=>{
 
   socket.on('rematch',({gameId})=>{
     const g = games.get(gameId);
+
+    if (g.state !== 'finished') return;
 
     Object.values(g.players).forEach(p=>{
       p.secret=null;
