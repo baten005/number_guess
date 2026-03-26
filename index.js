@@ -13,7 +13,7 @@ const games = new Map();
 
 function createGame() {
   const id = randomUUID();
-  games.set(id, {
+  const game = {
     id,
     players: {},
     order: [],
@@ -21,16 +21,18 @@ function createGame() {
     turn: null,
     history: [],
     winner: null
-  });
-  return games.get(id);
+  };
+  games.set(id, game);
+  return game;
 }
 
+/* HOME */
 app.get('/', (req, res) => {
   res.send(`
   <html>
   <body style="font-family:sans-serif;text-align:center;background:#111;color:#fff;padding:50px">
     <h1>🎯 Guess Game</h1>
-    <button onclick="start()">Start</button>
+    <button onclick="start()" style="padding:15px 25px;font-size:20px">Start Game</button>
 
     <script>
       async function start(){
@@ -44,197 +46,297 @@ app.get('/', (req, res) => {
   `);
 });
 
+/* CREATE GAME */
 app.get('/new', (req,res)=>{
   const g = createGame();
   res.json({id:g.id});
 });
 
+/* GAME PAGE */
 app.get('/game/:id',(req,res)=>{
   const id = req.params.id;
 
   res.send(`
-  <html>
-  <head>
-    <script src="/socket.io/socket.io.js"></script>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="/socket.io/socket.io.js"></script>
 
-    <style>
-      body {
-        font-family: Inter;
-        background: linear-gradient(135deg,#1e3a8a,#2563eb);
-      }
+<style>
+body {
+  margin:0;
+  font-family: Inter, sans-serif;
+  background: linear-gradient(135deg,#1e3a8a,#2563eb);
+  color:white;
+}
 
-      .card {
-        max-width:700px;
-        margin:30px auto;
-        background:white;
-        padding:20px;
-        border-radius:15px;
-        box-shadow:0 10px 30px rgba(0,0,0,0.2);
-      }
+#statusBar {
+  text-align:center;
+  padding:14px;
+  font-size:18px;
+  background:rgba(0,0,0,0.2);
+}
 
-      button {
-        padding:10px;
-        margin:5px;
-        border:none;
-        border-radius:8px;
-        background:#2563eb;
-        color:white;
-        cursor:pointer;
-      }
+.container {
+  padding:12px;
+}
 
-      input {
-        padding:10px;
-        width:100%;
-        margin-top:5px;
-      }
+.players {
+  display:flex;
+  gap:10px;
+}
 
-      #log {
-        height:200px;
-        overflow:auto;
-        background:#f1f5f9;
-        padding:10px;
-        border-radius:10px;
-      }
+.player {
+  flex:1;
+  background:rgba(255,255,255,0.1);
+  padding:15px;
+  border-radius:15px;
+  text-align:center;
+  position:relative;
+}
 
-      .msg {
-        animation: fade 0.3s ease;
-      }
+.name {
+  font-size:18px;
+  font-weight:bold;
+}
 
-      @keyframes fade {
-        from {opacity:0; transform:translateY(10px);}
-        to {opacity:1; transform:translateY(0);}
-      }
+.emojiFloat {
+  position:absolute;
+  top:-10px;
+  left:50%;
+  transform:translateX(-50%);
+  font-size:40px;
+  animation: floatUp 1s ease forwards;
+}
 
-    </style>
-  </head>
+@keyframes floatUp {
+  0% {opacity:0; transform:translate(-50%,20px);}
+  50% {opacity:1;}
+  100% {opacity:0; transform:translate(-50%,-40px);}
+}
 
-  <body>
-    <div class="card">
-      <h2>🎮 Game Room</h2>
+.vs {
+  text-align:center;
+  font-size:22px;
+  margin:10px 0;
+}
 
-      <div id="join">
-        <input id="name" placeholder="Name">
-        <button onclick="join()">Join</button>
-      </div>
+.box {
+  background:white;
+  color:black;
+  margin-top:15px;
+  padding:15px;
+  border-radius:15px;
+}
 
-      <div id="secretBox" style="display:none">
-        <input id="secret" type="number" placeholder="Secret">
-        <button onclick="setSecret()">Set</button>
-      </div>
+input {
+  width:100%;
+  padding:15px;
+  font-size:18px;
+  border-radius:10px;
+  border:1px solid #ccc;
+}
 
-      <div id="gameBox" style="display:none">
-        <p id="turn"></p>
-        <input id="guess" type="number">
-        <button onclick="guess()">Guess</button>
+button {
+  width:100%;
+  padding:15px;
+  font-size:18px;
+  border:none;
+  border-radius:10px;
+  margin-top:10px;
+  background:#2563eb;
+  color:white;
+}
 
-        <div>
-          <button onclick="react('😂')">😂</button>
-          <button onclick="react('😭')">😭</button>
-          <button onclick="react('😡')">😡</button>
-          <button onclick="react('😉')">😉</button>
-        </div>
-      </div>
+.emojiBar {
+  display:flex;
+  justify-content:space-around;
+  margin-top:10px;
+}
 
-      <button id="rematch" style="display:none" onclick="rematch()">Rematch</button>
+.emojiBar button {
+  font-size:28px;
+  background:none;
+}
 
-      <div id="status"></div>
-      <div id="log"></div>
-    </div>
+.logs {
+  display:flex;
+  gap:10px;
+  margin-top:10px;
+}
 
-    <audio id="click" src="https://www.soundjay.com/buttons/button-16.mp3"></audio>
-    <audio id="win" src="https://www.soundjay.com/human/applause-8.mp3"></audio>
+.logBox {
+  flex:1;
+  background:rgba(255,255,255,0.1);
+  padding:10px;
+  border-radius:10px;
+  height:120px;
+  overflow:auto;
+  font-size:14px;
+}
+</style>
+</head>
 
-    <script>
-      const socket = io();
-      const gameId = "${id}";
+<body>
 
-      let playerId = localStorage.getItem('pid_'+gameId);
-      let name = localStorage.getItem('name_'+gameId);
+<div id="statusBar">Connecting...</div>
 
-      function play(id){
-        document.getElementById(id).play();
-      }
+<div class="container">
 
-      function log(msg){
-        const div = document.createElement('div');
-        div.className='msg';
-        div.innerText=msg;
-        document.getElementById('log').appendChild(div);
-      }
+<div class="players">
+  <div class="player" id="p1">
+    <div class="name" id="p1name">Player 1</div>
+  </div>
 
-      function join(){
-        name = document.getElementById('name').value;
+  <div class="player" id="p2">
+    <div class="name" id="p2name">Player 2</div>
+  </div>
+</div>
 
-        socket.emit('join',{gameId,name});
+<div class="vs">⚔️ VS ⚔️</div>
 
-        socket.on('joined',(data)=>{
-          playerId = data.id;
+<div class="box" id="joinBox">
+  <input id="name" placeholder="Enter your name">
+  <button onclick="join()">Join Game</button>
+</div>
 
-          localStorage.setItem('pid_'+gameId,playerId);
-          localStorage.setItem('name_'+gameId,name);
+<div class="box" id="secretBox" style="display:none">
+  <input id="secret" type="number" placeholder="Set secret number">
+  <button onclick="setSecret()">Set Secret</button>
+</div>
 
-          document.getElementById('join').style.display='none';
-        });
-      }
+<div class="box" id="gameBox" style="display:none">
+  <input id="guess" type="number" placeholder="Enter guess">
+  <button onclick="guess()">Guess</button>
 
-      function setSecret(){
-        const secret = Number(document.getElementById('secret').value);
-        socket.emit('secret',{gameId,playerId,secret});
-      }
+  <div class="emojiBar">
+    <button onclick="react('😂')">😂</button>
+    <button onclick="react('😭')">😭</button>
+    <button onclick="react('😡')">😡</button>
+    <button onclick="react('😉')">😉</button>
+    <button onclick="react('😘')">😘</button>
+  </div>
+</div>
 
-      function guess(){
-        play('click');
-        const g = Number(document.getElementById('guess').value);
-        socket.emit('guess',{gameId,playerId,guess:g});
-      }
+<div class="logs">
+  <div class="logBox" id="log1"></div>
+  <div class="logBox" id="log2"></div>
+</div>
 
-      function react(e){
-        socket.emit('react',{gameId,playerId,emoji:e});
-      }
+<button id="rematch" style="display:none" onclick="rematch()">🔁 Rematch</button>
 
-      function rematch(){
-        socket.emit('rematch',{gameId});
-      }
+</div>
 
-      socket.on('update',(g)=>{
+<audio id="emojiSound" src="https://www.soundjay.com/button/beep-07.mp3"></audio>
 
-        document.getElementById('log').innerHTML='';
-        g.history.forEach(log);
+<script>
+const socket = io();
+const gameId = location.pathname.split('/').pop();
 
-        if(g.state==='ready'){
-          document.getElementById('secretBox').style.display='block';
-        }
+let playerId = localStorage.getItem('pid_'+gameId);
 
-        if(g.state==='playing'){
-          document.getElementById('gameBox').style.display='block';
-          document.getElementById('turn').innerText =
-            g.turn===playerId ? 'Your turn' : 'Wait...';
-        }
+function showEmoji(target, emoji){
+  const el = document.createElement('div');
+  el.className = 'emojiFloat';
+  el.innerText = emoji;
+  document.getElementById(target).appendChild(el);
 
-        if(g.state==='finished'){
-          document.getElementById('rematch').style.display='block';
-          play('win');
+  setTimeout(()=>{
+    document.getElementById('emojiSound').play();
+    el.remove();
+  },1000);
+}
 
-          const secrets = Object.values(g.players)
-            .map(p=>p.name+': '+p.secret).join(' | ');
+function join(){
+  const name = document.getElementById('name').value;
+  socket.emit('join',{gameId,name});
+}
 
-          document.getElementById('status').innerText =
-            'Winner: '+g.winner + ' | ' + secrets;
-        }
-      });
+function setSecret(){
+  const s = Number(document.getElementById('secret').value);
+  socket.emit('secret',{gameId,playerId,secret:s});
+}
 
-      if(playerId){
-        socket.emit('rejoin',{gameId,playerId});
-        document.getElementById('join').style.display='none';
-      }
+function guess(){
+  const g = Number(document.getElementById('guess').value);
+  socket.emit('guess',{gameId,playerId,guess:g});
+}
 
-    </script>
-  </body>
-  </html>
-  `);
+function react(e){
+  socket.emit('react',{gameId,playerId,emoji:e});
+}
+
+function rematch(){
+  socket.emit('rematch',{gameId});
+}
+
+socket.on('joined',(d)=>{
+  playerId = d.id;
+  localStorage.setItem('pid_'+gameId,playerId);
+  document.getElementById('joinBox').style.display='none';
 });
 
-/* ================= SOCKET ================= */
+socket.on('update',(g)=>{
+  window.lastGame = g;
+
+  const ids = Object.keys(g.players);
+  const p1 = g.players[ids[0]];
+  const p2 = g.players[ids[1]];
+
+  if(p1) document.getElementById('p1name').innerText = p1.name;
+  if(p2) document.getElementById('p2name').innerText = p2.name;
+
+  if(g.state==='waiting'){
+    statusBar.innerText = 'Waiting for opponent...';
+  }
+  else if(g.state==='ready'){
+    statusBar.innerText = 'Set your secret number';
+    document.getElementById('secretBox').style.display='block';
+  }
+  else if(g.state==='playing'){
+    statusBar.innerText =
+      g.turn===playerId ? 'Your turn 🔥' : 'Opponent thinking...';
+    document.getElementById('gameBox').style.display='block';
+  }
+  else if(g.state==='finished'){
+    statusBar.innerText = 'Winner: '+g.winner;
+    document.getElementById('rematch').style.display='block';
+  }
+
+  const log1 = document.getElementById('log1');
+  const log2 = document.getElementById('log2');
+  log1.innerHTML='';
+  log2.innerHTML='';
+
+  g.history.forEach(h=>{
+    const div = document.createElement('div');
+    div.innerText = h;
+
+    if(h.includes(p1?.name)) log1.appendChild(div);
+    else log2.appendChild(div);
+  });
+});
+
+socket.on('emoji',({playerId:pid,emoji})=>{
+  const ids = Object.keys(window.lastGame.players);
+  const index = ids.indexOf(pid);
+
+  if(index===0) showEmoji('p1',emoji);
+  else showEmoji('p2',emoji);
+});
+
+if(playerId){
+  socket.emit('rejoin',{gameId,playerId});
+  document.getElementById('joinBox').style.display='none';
+}
+</script>
+
+</body>
+</html>
+`);
+});
+
+/* SOCKET */
 
 io.on('connection',(socket)=>{
 
@@ -304,6 +406,8 @@ io.on('connection',(socket)=>{
     const p = g.players[playerId];
 
     g.history.push(p.name+' reacted '+emoji);
+
+    io.to(gameId).emit('emoji', { playerId, emoji });
     io.to(gameId).emit('update',g);
   });
 
