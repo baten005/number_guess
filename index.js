@@ -235,6 +235,7 @@ const gameId = location.pathname.split('/').pop();
 
 let playerId = localStorage.getItem('pid_'+gameId);
 
+/* EMOJI FLOAT */
 function showEmoji(target, emoji){
   const el = document.createElement('div');
   el.className = 'emojiFloat';
@@ -247,35 +248,48 @@ function showEmoji(target, emoji){
   },1000);
 }
 
+/* JOIN */
 function join(){
   const name = document.getElementById('name').value;
   socket.emit('join',{gameId,name});
 }
 
+/* SECRET */
 function setSecret(){
-  const s = Number(document.getElementById('secret').value);
+  const input = document.getElementById('secret');
+  const s = Number(input.value);
+
   socket.emit('secret',{gameId,playerId,secret:s});
+  input.value = '';
 }
 
+/* GUESS */
 function guess(){
-  const g = Number(document.getElementById('guess').value);
+  const input = document.getElementById('guess');
+  const g = Number(input.value);
+
   socket.emit('guess',{gameId,playerId,guess:g});
+  input.value = '';
 }
 
+/* REACT */
 function react(e){
   socket.emit('react',{gameId,playerId,emoji:e});
 }
 
+/* REMATCH */
 function rematch(){
   socket.emit('rematch',{gameId});
 }
 
+/* JOIN RESPONSE */
 socket.on('joined',(d)=>{
   playerId = d.id;
   localStorage.setItem('pid_'+gameId,playerId);
   document.getElementById('joinBox').style.display='none';
 });
 
+/* UPDATE */
 socket.on('update',(g)=>{
   window.lastGame = g;
 
@@ -286,23 +300,35 @@ socket.on('update',(g)=>{
   if(p1) document.getElementById('p1name').innerText = p1.name;
   if(p2) document.getElementById('p2name').innerText = p2.name;
 
+  const me = g.players[playerId];
+
+  /* STATE HANDLING */
   if(g.state==='waiting'){
     statusBar.innerText = 'Waiting for opponent...';
   }
   else if(g.state==='ready'){
-    statusBar.innerText = 'Set your secret number';
-    document.getElementById('secretBox').style.display='block';
+    if(me && me.secretSet){
+      statusBar.innerText = 'Waiting for opponent...';
+      document.getElementById('secretBox').style.display='none';
+    } else {
+      statusBar.innerText = 'Set your secret number';
+      document.getElementById('secretBox').style.display='block';
+    }
   }
   else if(g.state==='playing'){
     statusBar.innerText =
       g.turn===playerId ? 'Your turn 🔥' : 'Opponent thinking...';
     document.getElementById('gameBox').style.display='block';
+    document.getElementById('secretBox').style.display='none';
   }
   else if(g.state==='finished'){
     statusBar.innerText = 'Winner: '+g.winner;
     document.getElementById('rematch').style.display='block';
+  } else {
+    document.getElementById('rematch').style.display='none';
   }
 
+  /* LOGS */
   const log1 = document.getElementById('log1');
   const log2 = document.getElementById('log2');
   log1.innerHTML='';
@@ -317,6 +343,7 @@ socket.on('update',(g)=>{
   });
 });
 
+/* EMOJI EVENT */
 socket.on('emoji',({playerId:pid,emoji})=>{
   const ids = Object.keys(window.lastGame.players);
   const index = ids.indexOf(pid);
@@ -325,6 +352,7 @@ socket.on('emoji',({playerId:pid,emoji})=>{
   else showEmoji('p2',emoji);
 });
 
+/* REJOIN */
 if(playerId){
   socket.emit('rejoin',{gameId,playerId});
   document.getElementById('joinBox').style.display='none';
@@ -344,7 +372,7 @@ io.on('connection',(socket)=>{
     const g = games.get(gameId);
 
     const id = randomUUID();
-    g.players[id] = {id,name,secret:null};
+    g.players[id] = {id,name,secret:null,secretSet:false};
     g.order.push(id);
 
     socket.join(gameId);
@@ -364,9 +392,12 @@ io.on('connection',(socket)=>{
 
   socket.on('secret',({gameId,playerId,secret})=>{
     const g = games.get(gameId);
-    g.players[playerId].secret = secret;
+    const p = g.players[playerId];
 
-    if(Object.values(g.players).every(p=>p.secret)){
+    p.secret = secret;
+    p.secretSet = true;
+
+    if(Object.values(g.players).every(p=>p.secretSet)){
       g.state='playing';
       g.turn=g.order[0];
     }
@@ -402,19 +433,16 @@ io.on('connection',(socket)=>{
   });
 
   socket.on('react',({gameId,playerId,emoji})=>{
-    const g = games.get(gameId);
-    const p = g.players[playerId];
-
-    g.history.push(p.name+' reacted '+emoji);
-
     io.to(gameId).emit('emoji', { playerId, emoji });
-    io.to(gameId).emit('update',g);
   });
 
   socket.on('rematch',({gameId})=>{
     const g = games.get(gameId);
 
-    Object.values(g.players).forEach(p=>p.secret=null);
+    Object.values(g.players).forEach(p=>{
+      p.secret=null;
+      p.secretSet=false;
+    });
 
     g.state='ready';
     g.turn=null;
