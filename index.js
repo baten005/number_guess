@@ -1,65 +1,42 @@
 const express = require('express');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
-const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+const app = express();
+const server = createServer(app);
+const io = new Server(server);
+
+const PORT = 3000;
 
 const games = new Map();
 
-function createNewGame() {
+function createGame() {
   const id = randomUUID();
-  const game = {
+  games.set(id, {
     id,
     players: {},
     order: [],
     state: 'waiting',
     turn: null,
-    winner: null,
     history: [],
-  };
-  games.set(id, game);
-  return game;
-}
-
-function getGame(id) {
+    winner: null
+  });
   return games.get(id);
 }
 
-/* ================= HOME ================= */
 app.get('/', (req, res) => {
   res.send(`
   <html>
-  <head>
-    <title>Guess Game</title>
-    <style>
-      body {
-        font-family: Inter;
-        background: linear-gradient(135deg,#1e3a8a,#2563eb);
-        color:white;
-        text-align:center;
-        padding:50px;
-      }
-      button {
-        padding:12px 20px;
-        font-size:18px;
-        border:none;
-        border-radius:10px;
-        background:#22c55e;
-        color:white;
-        cursor:pointer;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>🎯 Number Guess Game</h1>
-    <button onclick="start()">Start Game</button>
+  <body style="font-family:sans-serif;text-align:center;background:#111;color:#fff;padding:50px">
+    <h1>🎯 Guess Game</h1>
+    <button onclick="start()">Start</button>
 
     <script>
       async function start(){
         const r = await fetch('/new');
         const d = await r.json();
-        location.href = '/game/' + d.gameId;
+        location.href = '/game/'+d.id;
       }
     </script>
   </body>
@@ -67,19 +44,23 @@ app.get('/', (req, res) => {
   `);
 });
 
-/* ================= GAME PAGE ================= */
-app.get('/game/:gameId', (req, res) => {
-  const { gameId } = req.params;
+app.get('/new', (req,res)=>{
+  const g = createGame();
+  res.json({id:g.id});
+});
+
+app.get('/game/:id',(req,res)=>{
+  const id = req.params.id;
 
   res.send(`
   <html>
   <head>
-    <title>Game</title>
+    <script src="/socket.io/socket.io.js"></script>
+
     <style>
       body {
         font-family: Inter;
         background: linear-gradient(135deg,#1e3a8a,#2563eb);
-        color:#111;
       }
 
       .card {
@@ -91,17 +72,9 @@ app.get('/game/:gameId', (req, res) => {
         box-shadow:0 10px 30px rgba(0,0,0,0.2);
       }
 
-      input {
-        padding:10px;
-        width:100%;
-        border-radius:8px;
-        border:1px solid #ccc;
-        margin-top:5px;
-      }
-
       button {
         padding:10px;
-        margin-top:10px;
+        margin:5px;
         border:none;
         border-radius:8px;
         background:#2563eb;
@@ -109,19 +82,29 @@ app.get('/game/:gameId', (req, res) => {
         cursor:pointer;
       }
 
-      #log {
-        background:#f1f5f9;
+      input {
         padding:10px;
-        margin-top:15px;
+        width:100%;
+        margin-top:5px;
+      }
+
+      #log {
         height:200px;
         overflow:auto;
+        background:#f1f5f9;
+        padding:10px;
         border-radius:10px;
       }
 
-      .emoji button {
-        margin:5px;
-        font-size:20px;
+      .msg {
+        animation: fade 0.3s ease;
       }
+
+      @keyframes fade {
+        from {opacity:0; transform:translateY(10px);}
+        to {opacity:1; transform:translateY(0);}
+      }
+
     </style>
   </head>
 
@@ -130,21 +113,21 @@ app.get('/game/:gameId', (req, res) => {
       <h2>🎮 Game Room</h2>
 
       <div id="join">
-        <input id="name" placeholder="Your name"/>
+        <input id="name" placeholder="Name">
         <button onclick="join()">Join</button>
       </div>
 
       <div id="secretBox" style="display:none">
-        <input id="secret" type="number" placeholder="Secret (1-1000)">
-        <button onclick="setSecret()">Set Secret</button>
+        <input id="secret" type="number" placeholder="Secret">
+        <button onclick="setSecret()">Set</button>
       </div>
 
       <div id="gameBox" style="display:none">
         <p id="turn"></p>
-        <input id="guess" type="number" placeholder="Guess">
+        <input id="guess" type="number">
         <button onclick="guess()">Guess</button>
 
-        <div class="emoji">
+        <div>
           <button onclick="react('😂')">😂</button>
           <button onclick="react('😭')">😭</button>
           <button onclick="react('😡')">😡</button>
@@ -152,202 +135,193 @@ app.get('/game/:gameId', (req, res) => {
         </div>
       </div>
 
-      <button id="rematchBtn" style="display:none" onclick="rematch()">🔁 Rematch</button>
+      <button id="rematch" style="display:none" onclick="rematch()">Rematch</button>
 
       <div id="status"></div>
       <div id="log"></div>
     </div>
 
+    <audio id="click" src="https://www.soundjay.com/buttons/button-16.mp3"></audio>
+    <audio id="win" src="https://www.soundjay.com/human/applause-8.mp3"></audio>
+
     <script>
-      const gameId = "${gameId}";
+      const socket = io();
+      const gameId = "${id}";
+
       let playerId = localStorage.getItem('pid_'+gameId);
-      let playerName = localStorage.getItem('pname_'+gameId);
+      let name = localStorage.getItem('name_'+gameId);
 
-      async function update(){
-        const r = await fetch('/api/game/'+gameId+'/status?playerId='+playerId);
-        const d = await r.json();
+      function play(id){
+        document.getElementById(id).play();
+      }
 
-        document.getElementById('log').innerHTML = d.history.map(h=>'<p>'+h+'</p>').join('');
+      function log(msg){
+        const div = document.createElement('div');
+        div.className='msg';
+        div.innerText=msg;
+        document.getElementById('log').appendChild(div);
+      }
 
-        if(d.state==='finished'){
-          document.getElementById('rematchBtn').style.display='block';
-          const secrets = Object.values(d.players).map(p=>p.name+': '+p.secret).join(' | ');
-          document.getElementById('status').innerHTML='Winner: '+d.winner+'<br>Secrets: '+secrets;
-        }
+      function join(){
+        name = document.getElementById('name').value;
 
-        if(d.state==='playing'){
-          document.getElementById('gameBox').style.display='block';
-          document.getElementById('turn').innerText = (d.turn===playerId) ? 'Your turn' : 'Wait...';
-        }
+        socket.emit('join',{gameId,name});
 
-        if(d.state==='ready'){
+        socket.on('joined',(data)=>{
+          playerId = data.id;
+
+          localStorage.setItem('pid_'+gameId,playerId);
+          localStorage.setItem('name_'+gameId,name);
+
+          document.getElementById('join').style.display='none';
+        });
+      }
+
+      function setSecret(){
+        const secret = Number(document.getElementById('secret').value);
+        socket.emit('secret',{gameId,playerId,secret});
+      }
+
+      function guess(){
+        play('click');
+        const g = Number(document.getElementById('guess').value);
+        socket.emit('guess',{gameId,playerId,guess:g});
+      }
+
+      function react(e){
+        socket.emit('react',{gameId,playerId,emoji:e});
+      }
+
+      function rematch(){
+        socket.emit('rematch',{gameId});
+      }
+
+      socket.on('update',(g)=>{
+
+        document.getElementById('log').innerHTML='';
+        g.history.forEach(log);
+
+        if(g.state==='ready'){
           document.getElementById('secretBox').style.display='block';
         }
-      }
 
-      async function join(){
-        const name = document.getElementById('name').value;
-        const r = await fetch('/api/game/'+gameId+'/join',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({name})
-        });
-        const d = await r.json();
+        if(g.state==='playing'){
+          document.getElementById('gameBox').style.display='block';
+          document.getElementById('turn').innerText =
+            g.turn===playerId ? 'Your turn' : 'Wait...';
+        }
 
-        playerId = d.playerId;
-        playerName = name;
+        if(g.state==='finished'){
+          document.getElementById('rematch').style.display='block';
+          play('win');
 
-        localStorage.setItem('pid_'+gameId,playerId);
-        localStorage.setItem('pname_'+gameId,name);
+          const secrets = Object.values(g.players)
+            .map(p=>p.name+': '+p.secret).join(' | ');
 
-        document.getElementById('join').style.display='none';
-        setInterval(update,1000);
-      }
-
-      async function setSecret(){
-        const secret = Number(document.getElementById('secret').value);
-        await fetch('/api/game/'+gameId+'/set-secret',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({playerId,secret})
-        });
-      }
-
-      async function guess(){
-        const g = Number(document.getElementById('guess').value);
-        await fetch('/api/game/'+gameId+'/guess',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({playerId,guess:g})
-        });
-      }
-
-      async function react(emoji){
-        await fetch('/api/game/'+gameId+'/react',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({playerId,emoji})
-        });
-      }
-
-      async function rematch(){
-        await fetch('/api/game/'+gameId+'/rematch',{method:'POST'});
-      }
+          document.getElementById('status').innerText =
+            'Winner: '+g.winner + ' | ' + secrets;
+        }
+      });
 
       if(playerId){
+        socket.emit('rejoin',{gameId,playerId});
         document.getElementById('join').style.display='none';
-        setInterval(update,1000);
       }
+
     </script>
   </body>
   </html>
   `);
 });
 
-/* ================= API ================= */
+/* ================= SOCKET ================= */
 
-app.get('/new', (req,res)=>{
-  const g = createNewGame();
-  res.json({gameId:g.id});
-});
+io.on('connection',(socket)=>{
 
-app.get('/api/game/:id/status',(req,res)=>{
-  const g = getGame(req.params.id);
+  socket.on('join',({gameId,name})=>{
+    const g = games.get(gameId);
 
-  const players = Object.fromEntries(
-    Object.entries(g.players).map(([id,p])=>[
-      id,
-      {name:p.name, secret:g.state==='finished'?p.secret:null}
-    ])
-  );
+    const id = randomUUID();
+    g.players[id] = {id,name,secret:null};
+    g.order.push(id);
 
-  res.json({
-    state:g.state,
-    turn:g.turn,
-    winner:g.winner,
-    history:g.history,
-    players
-  });
-});
+    socket.join(gameId);
+    socket.emit('joined',{id});
 
-app.post('/api/game/:id/join',(req,res)=>{
-  const g = getGame(req.params.id);
+    if(Object.keys(g.players).length===2){
+      g.state='ready';
+    }
 
-  const id = randomUUID();
-  g.players[id] = {id,name:req.body.name,secret:null};
-  g.order.push(id);
-
-  if(Object.keys(g.players).length===2) g.state='ready';
-
-  res.json({playerId:id});
-});
-
-app.post('/api/game/:id/set-secret',(req,res)=>{
-  const g = getGame(req.params.id);
-  const p = g.players[req.body.playerId];
-
-  p.secret = req.body.secret;
-
-  if(Object.values(g.players).every(p=>p.secret)){
-    g.state='playing';
-    g.turn=g.order[0];
-  }
-
-  res.json({});
-});
-
-app.post('/api/game/:id/guess',(req,res)=>{
-  const g = getGame(req.params.id);
-  const pid = req.body.playerId;
-
-  if(g.turn!==pid) return res.json({});
-
-  const oppId = g.order.find(x=>x!==pid);
-  const opp = g.players[oppId];
-
-  const guess = req.body.guess;
-  let msg = '';
-
-  if(guess===opp.secret){
-    g.state='finished';
-    g.winner=g.players[pid].name;
-    msg = '🎉 '+g.players[pid].name+' guessed '+guess+' correctly!';
-  } else if(guess<opp.secret){
-    msg = g.players[pid].name+' guessed '+guess+' → higher';
-  } else {
-    msg = g.players[pid].name+' guessed '+guess+' → lower';
-  }
-
-  g.history.push(msg);
-
-  if(g.state==='playing') g.turn=oppId;
-
-  res.json({});
-});
-
-app.post('/api/game/:id/react',(req,res)=>{
-  const g = getGame(req.params.id);
-  const p = g.players[req.body.playerId];
-
-  g.history.push(p.name + ' reacted ' + req.body.emoji);
-  res.json({});
-});
-
-app.post('/api/game/:id/rematch',(req,res)=>{
-  const g = getGame(req.params.id);
-
-  Object.values(g.players).forEach(p=>{
-    p.secret=null;
+    io.to(gameId).emit('update',g);
   });
 
-  g.state='ready';
-  g.history=[];
-  g.turn=null;
-  g.winner=null;
+  socket.on('rejoin',({gameId})=>{
+    socket.join(gameId);
+    io.to(gameId).emit('update',games.get(gameId));
+  });
 
-  res.json({});
+  socket.on('secret',({gameId,playerId,secret})=>{
+    const g = games.get(gameId);
+    g.players[playerId].secret = secret;
+
+    if(Object.values(g.players).every(p=>p.secret)){
+      g.state='playing';
+      g.turn=g.order[0];
+    }
+
+    io.to(gameId).emit('update',g);
+  });
+
+  socket.on('guess',({gameId,playerId,guess})=>{
+    const g = games.get(gameId);
+
+    if(g.turn!==playerId) return;
+
+    const oppId = g.order.find(x=>x!==playerId);
+    const opp = g.players[oppId];
+
+    let msg;
+
+    if(guess===opp.secret){
+      g.state='finished';
+      g.winner=g.players[playerId].name;
+      msg='🎉 '+g.winner+' guessed '+guess+'!';
+    } else if(guess<opp.secret){
+      msg=g.players[playerId].name+' guessed '+guess+' → higher';
+    } else {
+      msg=g.players[playerId].name+' guessed '+guess+' → lower';
+    }
+
+    g.history.push(msg);
+
+    if(g.state==='playing') g.turn=oppId;
+
+    io.to(gameId).emit('update',g);
+  });
+
+  socket.on('react',({gameId,playerId,emoji})=>{
+    const g = games.get(gameId);
+    const p = g.players[playerId];
+
+    g.history.push(p.name+' reacted '+emoji);
+    io.to(gameId).emit('update',g);
+  });
+
+  socket.on('rematch',({gameId})=>{
+    const g = games.get(gameId);
+
+    Object.values(g.players).forEach(p=>p.secret=null);
+
+    g.state='ready';
+    g.turn=null;
+    g.winner=null;
+    g.history=[];
+
+    io.to(gameId).emit('update',g);
+  });
+
 });
 
-app.listen(PORT,()=>{
-  console.log('Running on http://localhost:'+PORT);
+server.listen(PORT,()=>{
+  console.log('🔥 Running on http://localhost:'+PORT);
 });
